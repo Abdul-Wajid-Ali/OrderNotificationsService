@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using OrderNotificationsService.Features.Orders.CreateOrder;
+using OrderNotificationsService.Features.Orders.UpdateOrderStatus;
 using OrderNotificationsService.Infrastructure.Persistence;
 
 // Initializes the web application builder to configure services and configuration sources.
@@ -15,6 +17,10 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(
         builder.Configuration.GetConnectionString("DefaultConnection")));
+
+//Registers the command handlers for creating orders and updating order statuses in the dependency injection container.
+builder.Services.AddScoped<CreateOrderHandler>();
+builder.Services.AddScoped<UpdateOrderStatusHandler>();
 
 // Finalizes the service configurations and builds the application instance.
 var app = builder.Build();
