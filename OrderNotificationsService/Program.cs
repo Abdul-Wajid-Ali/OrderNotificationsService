@@ -1,45 +1,53 @@
 using Microsoft.EntityFrameworkCore;
 using OrderNotificationsService.Features.Orders.CreateOrder;
 using OrderNotificationsService.Features.Orders.UpdateOrderStatus;
+using OrderNotificationsService.Infrastructure.BackgroundServices;
+using OrderNotificationsService.Infrastructure.Messaging;
 using OrderNotificationsService.Infrastructure.Persistence;
 
-// Initializes the web application builder to configure services and configuration sources.
+// Configure application builder and services
 var builder = WebApplication.CreateBuilder(args);
 
-// Registers controller services into the dependency injection container for API functionality.
+// Register MVC controllers
 builder.Services.AddControllers();
 
-// Configures metadata generation for Swagger/OpenAPI documentation.
+// Enable OpenAPI/Swagger for API documentation
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Registers the Entity Framework DbContext with SQL Server using the defined connection string.
+// Configure EF Core with SQL Server
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlServer(
         builder.Configuration.GetConnectionString("DefaultConnection")));
 
-//Registers the command handlers for creating orders and updating order statuses in the dependency injection container.
+// Register application handlers
 builder.Services.AddScoped<CreateOrderHandler>();
 builder.Services.AddScoped<UpdateOrderStatusHandler>();
 
-// Finalizes the service configurations and builds the application instance.
+// Register messaging components
+builder.Services.AddSingleton<RabbitMqPublisher>();
+
+// Background worker that publishes outbox events
+builder.Services.AddHostedService<OutboxProcessor>();
+
+// Build the application pipeline
 var app = builder.Build();
 
-// Enables the Swagger UI middleware only when the application is running in development mode.
+// Enable Swagger UI in development
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-// Redirects all HTTP requests to HTTPS for secure communication.
+// Enforce HTTPS
 app.UseHttpsRedirection();
 
-// Adds authorization middleware to ensure user permissions are validated.
+// Enable authorization middleware
 app.UseAuthorization();
 
-// Maps incoming HTTP requests to the appropriate controller action methods.
+// Map controller routes
 app.MapControllers();
 
-// Starts the application and begins listening for incoming requests asynchronously.
+// Start the application
 await app.RunAsync();
