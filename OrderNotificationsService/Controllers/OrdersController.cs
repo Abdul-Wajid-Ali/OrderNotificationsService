@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using OrderNotificationsService.Features.Common;
 using OrderNotificationsService.Features.Orders.CreateOrder;
 using OrderNotificationsService.Features.Orders.UpdateOrderStatus;
 
@@ -34,7 +35,16 @@ namespace OrderNotificationsService.Controllers
                 NewStatus = request.Status
             };
 
-            await handler.Handle(command);
+            var result = await handler.Handle(command);
+
+            if (!result.IsSuccess)
+            {
+                return result.ErrorCode switch
+                {
+                    HandlerErrorCode.NotFound => NotFound(new { Message = "Order was not found." }),
+                    _ => StatusCode(StatusCodes.Status500InternalServerError, new { Message = "An unexpected error occurred." })
+                };
+            }
 
             return Ok(new
             {

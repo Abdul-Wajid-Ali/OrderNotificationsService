@@ -1,5 +1,6 @@
 ﻿using OrderNotificationsService.Domain.Entities;
 using OrderNotificationsService.Domain.Events;
+using OrderNotificationsService.Features.Common;
 using OrderNotificationsService.Infrastructure.Persistence;
 using System.Text.Json;
 
@@ -14,14 +15,17 @@ namespace OrderNotificationsService.Features.Orders.UpdateOrderStatus
             _dbContext = dbContext;
         }
 
-        public async Task Handle(UpdateOrderStatusCommand command)
+        public async Task<HandlerResult> Handle(UpdateOrderStatusCommand command)
         {
             var order = await _dbContext.Orders.FindAsync(command.OrderId);
 
             if (order == null)
-                throw new Exception("Order not found");
+                return HandlerResult.Failure(HandlerErrorCode.NotFound);
 
             var oldStatus = order.Status;
+
+            if (oldStatus == command.NewStatus)
+                return HandlerResult.Success();
 
             order.Status = command.NewStatus;
             order.UpdatedAt = DateTime.UtcNow;
@@ -46,6 +50,8 @@ namespace OrderNotificationsService.Features.Orders.UpdateOrderStatus
             _dbContext.OutboxEvents.Add(outboxEvent);
 
             await _dbContext.SaveChangesAsync();
+
+            return HandlerResult.Success();
         }
     }
 }
