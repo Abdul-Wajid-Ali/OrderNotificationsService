@@ -1,6 +1,8 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using OrderNotificationsService.Infrastructure.Messaging;
+using OrderNotificationsService.Domain.Events;
+using OrderNotificationsService.Features.Notifications.ProcessOrderStatusChanged;
 using OrderNotificationsService.Infrastructure.Persistence;
+using System.Text.Json;
 
 namespace OrderNotificationsService.Infrastructure.BackgroundServices
 {
@@ -21,7 +23,7 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
             {
                 await ProcessOutboxEvents(stoppingToken);
 
-                await Task.Delay(5000, stoppingToken);
+                await Task.Delay(2000, stoppingToken);
             }
         }
 
@@ -30,9 +32,11 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
             using var scope = _serviceProvider.CreateScope();
 
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var orderStatusChangedHandler = scope.ServiceProvider.GetRequiredService<OrderStatusChangedHandler>();
 
             var events = await db.OutboxEvents
                 .Where(x => x.ProcessedAt == null)
+                .OrderBy(x => x.CreatedAt)
                 .Take(20)
                 .ToListAsync(token);
 
@@ -40,11 +44,22 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
             {
                 try
                 {
-                    _logger.LogInformation("Processing event {EventId}", evt.Id);
+                    if (evt.EventType == nameof(OrderStatusChangedEvent))
+                    {
+                        var domainEvent = JsonSerializer.Deserialize<OrderStatusChangedEvent>(evt.Payload);
 
-                    var publisher = scope.ServiceProvider.GetRequiredService<RabbitMqPublisher>();
+                        if (domainEvent == null)
+                        {
+                            _logger.LogWarning("Invalid event payload for outbox event {EventId}", evt.Id);
+                            continue;
+                        }
 
-                    await publisher.PublishAsync(evt);
+                        await orderStatusChangedHandler.Handle(domainEvent, token);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("No handler configured for event type {EventType}", evt.EventType);
+                    }
 
                     evt.ProcessedAt = DateTime.UtcNow;
                 }

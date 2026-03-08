@@ -1,16 +1,53 @@
-﻿using OrderNotificationsService.Domain.Events;
+﻿using OrderNotificationsService.Domain.Entities;
+using OrderNotificationsService.Domain.Enums;
+using OrderNotificationsService.Domain.Events;
+using OrderNotificationsService.Infrastructure.Persistence;
 
 namespace OrderNotificationsService.Features.Notifications.ProcessOrderStatusChanged
 {
     public class OrderStatusChangedHandler
     {
-        public async Task Handle(OrderStatusChangedEvent evt)
-        {
-            // send email
-            Console.WriteLine($"Email sent to user {evt.UserId}");
+        private readonly AppDbContext _dbContext;
+        private readonly ILogger<OrderStatusChangedHandler> _logger;
 
-            // create in-app notification
-            Console.WriteLine($"In-app notification created");
+        public OrderStatusChangedHandler(AppDbContext dbContext, ILogger<OrderStatusChangedHandler> logger)
+        {
+            _dbContext = dbContext;
+            _logger = logger;
+        }
+
+        public async Task Handle(OrderStatusChangedEvent evt, CancellationToken cancellationToken)
+        {
+            var message = $"Your order {evt.OrderId} changed from {evt.OldStatus} to {evt.NewStatus}.";
+
+            var inAppNotification = new Notification
+            {
+                Id = Guid.NewGuid(),
+                UserId = evt.UserId,
+                OrderId = evt.OrderId,
+                Message = message,
+                Type = NotificationType.InApp,
+                IsRead = false,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            var emailNotification = new Notification
+            {
+                Id = Guid.NewGuid(),
+                UserId = evt.UserId,
+                OrderId = evt.OrderId,
+                Message = message,
+                Type = NotificationType.Email,
+                IsRead = true,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _dbContext.Notifications.Add(inAppNotification);
+            _dbContext.Notifications.Add(emailNotification);
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            _logger.LogInformation("Simulated email notification for user {UserId} and order {OrderId}", evt.UserId, evt.OrderId);
         }
     }
 }

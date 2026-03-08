@@ -1,8 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using OrderNotificationsService.Features.Notifications.GetUserNotifications;
+using OrderNotificationsService.Features.Notifications.ProcessOrderStatusChanged;
 using OrderNotificationsService.Features.Orders.CreateOrder;
 using OrderNotificationsService.Features.Orders.UpdateOrderStatus;
 using OrderNotificationsService.Infrastructure.BackgroundServices;
-using OrderNotificationsService.Infrastructure.Messaging;
 using OrderNotificationsService.Infrastructure.Persistence;
 
 // Configure application builder and services
@@ -23,11 +24,10 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 // Register application handlers
 builder.Services.AddScoped<CreateOrderHandler>();
 builder.Services.AddScoped<UpdateOrderStatusHandler>();
+builder.Services.AddScoped<OrderStatusChangedHandler>();
+builder.Services.AddScoped<GetUserNotificationsHandler>();
 
-// Register messaging components
-builder.Services.AddSingleton<RabbitMqPublisher>();
-
-// Background worker that publishes outbox events
+// Background worker that processes outbox events and creates notifications
 builder.Services.AddHostedService<OutboxProcessor>();
 
 // Build the application pipeline
