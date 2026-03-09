@@ -1,6 +1,8 @@
-﻿using OrderNotificationsService.Domain.Entities;
+﻿using Microsoft.EntityFrameworkCore;
+using OrderNotificationsService.Domain.Entities;
 using OrderNotificationsService.Domain.Enums;
 using OrderNotificationsService.Domain.Events;
+using OrderNotificationsService.Infrastructure.Notifications;
 using OrderNotificationsService.Infrastructure.Persistence;
 
 namespace OrderNotificationsService.Features.Notifications.ProcessOrderStatusChanged
@@ -8,46 +10,87 @@ namespace OrderNotificationsService.Features.Notifications.ProcessOrderStatusCha
     public class OrderStatusChangedHandler
     {
         private readonly AppDbContext _dbContext;
-        private readonly ILogger<OrderStatusChangedHandler> _logger;
+        private readonly IEmailSender _emailSender;
 
-        public OrderStatusChangedHandler(AppDbContext dbContext, ILogger<OrderStatusChangedHandler> logger)
+        public OrderStatusChangedHandler(AppDbContext dbContext, IEmailSender emailSender)
         {
             _dbContext = dbContext;
-            _logger = logger;
+            _emailSender = emailSender;
         }
 
-        public async Task Handle(OrderStatusChangedEvent evt, CancellationToken cancellationToken)
+        public async Task Handle(OrderStatusChangedEvent evt, Guid sourceEventId, CancellationToken cancellationToken)
         {
             var message = $"Your order {evt.OrderId} changed from {evt.OldStatus} to {evt.NewStatus}.";
 
-            var inAppNotification = new Notification
+            var existingNotifications = await _dbContext.Notifications
+                .Where(x => x.SourceEventId == sourceEventId)
+                .ToListAsync(cancellationToken);
+
+            var inAppNotification = existingNotifications.FirstOrDefault(x => x.Type == NotificationType.InApp);
+            if (inAppNotification == null)
             {
-                Id = Guid.NewGuid(),
-                UserId = evt.UserId,
-                OrderId = evt.OrderId,
-                Message = message,
-                Type = NotificationType.InApp,
-                IsRead = false,
-                CreatedAt = DateTime.UtcNow
-            };
+                inAppNotification = new Notification
+                {
+                    Id = Guid.NewGuid(),
+                    SourceEventId = sourceEventId,
+                    UserId = evt.UserId,
+                    OrderId = evt.OrderId,
+                    Message = message,
+                    Type = NotificationType.InApp,
+                    DeliveryStatus = NotificationDeliveryStatus.Sent,
+                    DeliveryAttemptCount = 0,
+                    DeliveredAt = DateTime.UtcNow,
+                    IsRead = false,
+                    CreatedAt = DateTime.UtcNow
+                };
 
-            var emailNotification = new Notification
+                _dbContext.Notifications.Add(inAppNotification);
+            }
+
+            var emailNotification = existingNotifications.FirstOrDefault(x => x.Type == NotificationType.Email);
+            if (emailNotification == null)
             {
-                Id = Guid.NewGuid(),
-                UserId = evt.UserId,
-                OrderId = evt.OrderId,
-                Message = message,
-                Type = NotificationType.Email,
-                IsRead = true,
-                CreatedAt = DateTime.UtcNow
-            };
+                emailNotification = new Notification
+                {
+                    Id = Guid.NewGuid(),
+                    SourceEventId = sourceEventId,
+                    UserId = evt.UserId,
+                    OrderId = evt.OrderId,
+                    Message = message,
+                    Type = NotificationType.Email,
+                    DeliveryStatus = NotificationDeliveryStatus.Pending,
+                    DeliveryAttemptCount = 0,
+                    IsRead = true,
+                    CreatedAt = DateTime.UtcNow
+                };
 
-            _dbContext.Notifications.Add(inAppNotification);
-            _dbContext.Notifications.Add(emailNotification);
+                _dbContext.Notifications.Add(emailNotification);
+            }
 
-            await _dbContext.SaveChangesAsync(cancellationToken);
+            if (emailNotification.DeliveryStatus == NotificationDeliveryStatus.Sent)
+            {
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                return;
+            }
 
-            _logger.LogInformation("Simulated email notification for user {UserId} and order {OrderId}", evt.UserId, evt.OrderId);
+            emailNotification.DeliveryAttemptCount += 1;
+
+            emailNotification.LastDeliveryError = null;
+
+            try
+            {
+                await _emailSender.SendOrderStatusChangeAsync(evt.UserId, evt.OrderId, message, cancellationToken);
+                emailNotification.DeliveryStatus = NotificationDeliveryStatus.Sent;
+                emailNotification.DeliveredAt = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                emailNotification.DeliveryStatus = NotificationDeliveryStatus.Failed;
+                emailNotification.LastDeliveryError = ex.Message;
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                throw;
+            }
         }
     }
 }

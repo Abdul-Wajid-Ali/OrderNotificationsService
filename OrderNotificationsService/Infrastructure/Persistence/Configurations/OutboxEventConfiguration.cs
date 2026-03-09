@@ -24,7 +24,17 @@ namespace OrderNotificationsService.Infrastructure.Persistence.Configurations
 
             builder.Property(x => x.ProcessedAt);
 
+            builder.Property(x => x.RetryCount)
+                  .IsRequired();
+
+            builder.Property(x => x.LastError)
+                   .HasMaxLength(2000);
+
             builder.HasIndex(x => x.ProcessedAt);
+
+            builder.HasIndex(x => x.DeadLetteredAt);
+
+            builder.HasIndex(x => new { x.ProcessedAt, x.DeadLetteredAt, x.NextRetryAt });
         }
     }
 }

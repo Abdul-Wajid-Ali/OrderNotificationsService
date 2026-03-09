@@ -5,6 +5,7 @@ using OrderNotificationsService.Features.Orders.CreateOrder;
 using OrderNotificationsService.Features.Orders.UpdateOrderStatus;
 using OrderNotificationsService.Infrastructure.BackgroundServices;
 using OrderNotificationsService.Infrastructure.Messaging;
+using OrderNotificationsService.Infrastructure.Notifications;
 using OrderNotificationsService.Infrastructure.Persistence;
 using System.Text.Json.Serialization;
 
@@ -39,6 +40,7 @@ namespace OrderNotificationsService.Extensions
             builder.Services.AddScoped<UpdateOrderStatusHandler>();
             builder.Services.AddScoped<OrderStatusChangedHandler>();
             builder.Services.AddScoped<GetUserNotificationsHandler>();
+            builder.Services.AddScoped<IEmailSender, LoggingEmailSender>();
 
             // Background worker that processes outbox events and creates notifications
             builder.Services.AddHostedService<OutboxProcessor>();

@@ -8,6 +8,8 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
 {
     public class OutboxProcessor : BackgroundService
     {
+        private const int MaxRetries = 5;
+        private static readonly TimeSpan BaseRetryDelay = TimeSpan.FromSeconds(5);
         private readonly IServiceProvider _serviceProvider;
         private readonly ILogger<OutboxProcessor> _logger;
 
@@ -37,9 +39,12 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var orderStatusChangedHandler = scope.ServiceProvider.GetRequiredService<OrderStatusChangedHandler>();
 
+            var now = DateTime.UtcNow;
+
             // Pull only unprocessed events in creation order so processing is deterministic.
             var events = await db.OutboxEvents
-                .Where(x => x.ProcessedAt == null)
+                .Where(x => x.ProcessedAt == null && x.DeadLetteredAt == null)
+                .Where(x => x.NextRetryAt == null || x.NextRetryAt <= now)
                 .OrderBy(x => x.CreatedAt)
                 .Take(20)
                 .ToListAsync(token);
@@ -57,11 +62,12 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
                         if (domainEvent == null)
                         {
                             _logger.LogWarning("Invalid event payload for outbox event {EventId}", evt.Id);
+                            evt.ProcessedAt = DateTime.UtcNow;
                             continue;
                         }
 
                         // Delegate business logic to the notification handler.
-                        await orderStatusChangedHandler.Handle(domainEvent, token);
+                        await orderStatusChangedHandler.Handle(domainEvent, evt.Id, token);
                     }
                     else
                     {
@@ -69,12 +75,27 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
                     }
 
                     // Mark event as processed only after successful handling.
-                    evt.ProcessedAt = DateTime.UtcNow;
+                    evt.ProcessedAt = DateTime.UtcNow; 
+                    evt.LastError = null;
+                    evt.NextRetryAt = null;
                 }
                 catch (Exception ex)
                 {
-                    // Log and continue so the event can be retried on the next pass.
-                    _logger.LogError(ex, "Failed processing event {EventId}", evt.Id);
+                    evt.RetryCount += 1;
+                    evt.LastError = ex.Message;
+
+                    if (evt.RetryCount >= MaxRetries)
+                    {
+                        evt.DeadLetteredAt = DateTime.UtcNow;
+                        evt.NextRetryAt = null;
+                        _logger.LogError(ex, "Outbox event {EventId} moved to dead letter after {RetryCount} attempts", evt.Id, evt.RetryCount);
+                    }
+                    else
+                    {
+                        var retryDelaySeconds = BaseRetryDelay.TotalSeconds * Math.Pow(2, evt.RetryCount - 1);
+                        evt.NextRetryAt = DateTime.UtcNow.AddSeconds(Math.Min(retryDelaySeconds, 300));
+                        _logger.LogError(ex, "Failed processing event {EventId}. Retrying at {NextRetryAt} (attempt {RetryCount}/{MaxRetries})", evt.Id, evt.NextRetryAt, evt.RetryCount, MaxRetries);
+                    }
                 }
             }
 
