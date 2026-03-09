@@ -81,19 +81,29 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
                 }
                 catch (Exception ex)
                 {
+                    // Increment retry count and record the last error message for observability.
                     evt.RetryCount += 1;
                     evt.LastError = ex.Message;
 
+                    // If the event has exceeded the allowed retry attempts,
+                    // move it to a dead-letter state so it stops blocking the pipeline.
                     if (evt.RetryCount >= MaxRetries)
                     {
                         evt.DeadLetteredAt = DateTime.UtcNow;
                         evt.NextRetryAt = null;
+
+                        // Dead-letter events can later be inspected or replayed manually.
                         _logger.LogError(ex, "Outbox event {EventId} moved to dead letter after {RetryCount} attempts", evt.Id, evt.RetryCount);
                     }
                     else
                     {
+                        // Apply exponential backoff to avoid hammering downstream systems.
+                        // Delay grows as: 5s → 10s → 20s → 40s → ... up to a max of 5 minutes.
                         var retryDelaySeconds = BaseRetryDelay.TotalSeconds * Math.Pow(2, evt.RetryCount - 1);
+
+                        // Cap retry delay so failures don't create extremely long waits.
                         evt.NextRetryAt = DateTime.UtcNow.AddSeconds(Math.Min(retryDelaySeconds, 300));
+
                         _logger.LogError(ex, "Failed processing event {EventId}. Retrying at {NextRetryAt} (attempt {RetryCount}/{MaxRetries})", evt.Id, evt.NextRetryAt, evt.RetryCount, MaxRetries);
                     }
                 }

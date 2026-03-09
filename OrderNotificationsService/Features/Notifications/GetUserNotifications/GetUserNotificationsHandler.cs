@@ -4,6 +4,7 @@ using OrderNotificationsService.Infrastructure.Persistence;
 
 namespace OrderNotificationsService.Features.Notifications.GetUserNotifications
 {
+    // Implements GetUserNotificationsHandler behavior for the order notifications service.
     public class GetUserNotificationsHandler
     {
         private readonly AppDbContext _dbContext;

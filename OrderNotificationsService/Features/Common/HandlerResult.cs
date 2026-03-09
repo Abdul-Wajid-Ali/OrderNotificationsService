@@ -1,5 +1,6 @@
 ﻿namespace OrderNotificationsService.Features.Common
 {
+    // Implements HandlerResult behavior for the order notifications service.
     public sealed class HandlerResult
     {
         private HandlerResult(bool isSuccess, HandlerErrorCode errorCode)

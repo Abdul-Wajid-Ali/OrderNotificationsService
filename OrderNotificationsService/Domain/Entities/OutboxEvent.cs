@@ -1,6 +1,4 @@
-﻿using OrderNotificationsService.Domain.Enums;
-
-namespace OrderNotificationsService.Domain.Entities
+﻿namespace OrderNotificationsService.Domain.Entities
 {
     public class OutboxEvent
     {
