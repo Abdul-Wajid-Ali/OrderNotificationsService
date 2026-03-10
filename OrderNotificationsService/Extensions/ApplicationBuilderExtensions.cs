@@ -4,7 +4,9 @@ using OrderNotificationsService.Features.Notifications.ProcessOrderStatusChanged
 using OrderNotificationsService.Features.Orders.CreateOrder;
 using OrderNotificationsService.Features.Orders.UpdateOrderStatus;
 using OrderNotificationsService.Infrastructure.BackgroundServices;
+using OrderNotificationsService.Infrastructure.Correlation;
 using OrderNotificationsService.Infrastructure.Messaging;
+using OrderNotificationsService.Infrastructure.Monitoring;
 using OrderNotificationsService.Infrastructure.Notifications;
 using OrderNotificationsService.Infrastructure.Persistence;
 using System.Text.Json.Serialization;
@@ -31,19 +33,30 @@ namespace OrderNotificationsService.Extensions
                 options.UseSqlServer(
                     builder.Configuration.GetConnectionString("DefaultConnection")));
 
-            // Configure RabbitMQ options from configuration
+            // Configuration binding (RabbitMQ + monitoring settings)
             builder.Services.Configure<RabbitMqOptions>(
                 builder.Configuration.GetSection(RabbitMqOptions.SectionName));
 
-            // Register application handlers
+            builder.Services.Configure<MonitoringOptions>(
+               builder.Configuration.GetSection(MonitoringOptions.SectionName));
+
+            // Application handlers (business use cases)
             builder.Services.AddScoped<CreateOrderHandler>();
             builder.Services.AddScoped<UpdateOrderStatusHandler>();
             builder.Services.AddScoped<OrderStatusChangedHandler>();
             builder.Services.AddScoped<GetUserNotificationsHandler>();
+
+            // Notification infrastructure
             builder.Services.AddScoped<IEmailSender, LoggingEmailSender>();
 
-            // Background worker that processes outbox events and creates notifications
+            // Messaging & observability infrastructure
+            builder.Services.AddSingleton<ICorrelationContextAccessor, CorrelationContextAccessor>();
+            builder.Services.AddSingleton<NotificationPipelineMetrics>();
+            builder.Services.AddSingleton<RabbitMqPublisher>();
+
+            // Background workers
             builder.Services.AddHostedService<OutboxProcessor>();
+            builder.Services.AddHostedService<OrderStatusConsumer>();
 
             return builder;
         }
@@ -56,6 +69,9 @@ namespace OrderNotificationsService.Extensions
                 app.UseSwagger();
                 app.UseSwaggerUI();
             }
+
+            // Correlation ID middleware for request tracing
+            app.UseMiddleware<CorrelationIdMiddleware>();
 
             // Enforce HTTPS
             app.UseHttpsRedirection();

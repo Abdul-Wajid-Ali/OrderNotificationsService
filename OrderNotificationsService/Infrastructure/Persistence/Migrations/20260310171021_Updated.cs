@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace OrderNotificationsService.Infrastructure.Persistence.Migrations
 {
     /// <inheritdoc />
-    public partial class NotificationandOutboxUpdated : Migration
+    public partial class Updated : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)

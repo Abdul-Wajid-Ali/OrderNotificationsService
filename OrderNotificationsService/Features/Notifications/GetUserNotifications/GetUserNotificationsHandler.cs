@@ -4,7 +4,6 @@ using OrderNotificationsService.Infrastructure.Persistence;
 
 namespace OrderNotificationsService.Features.Notifications.GetUserNotifications
 {
-    // Implements GetUserNotificationsHandler behavior for the order notifications service.
     public class GetUserNotificationsHandler
     {
         private readonly AppDbContext _dbContext;
@@ -16,8 +15,10 @@ namespace OrderNotificationsService.Features.Notifications.GetUserNotifications
 
         public async Task<List<Notification>> Handle(GetUserNotificationsQuery query, CancellationToken cancellationToken)
         {
+            // Clamp page size to enforce safe query limits
             var pageSize = Math.Clamp(query.PageSize, 1, 100);
 
+            // Fetch latest notifications for the user ordered by creation time
             return await _dbContext.Notifications
                 .Where(x => x.UserId == query.UserId)
                 .OrderByDescending(x => x.CreatedAt)

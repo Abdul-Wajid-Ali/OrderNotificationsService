@@ -1,4 +1,6 @@
 ﻿using Microsoft.Extensions.Options;
+using OrderNotificationsService.Infrastructure.Contracts;
+using OrderNotificationsService.Infrastructure.Monitoring;
 using RabbitMQ.Client;
 using System.Text;
 using System.Text.Json;
@@ -12,38 +14,42 @@ namespace OrderNotificationsService.Infrastructure.Messaging
         private IChannel? _channel;
         private bool _initialized;
         private readonly SemaphoreSlim _initLock = new(1, 1);
+        private readonly NotificationPipelineMetrics _metrics;
 
-        public RabbitMqPublisher(IOptions<RabbitMqOptions> rabbitMqOptions)
+        public RabbitMqPublisher(IOptions<RabbitMqOptions> rabbitMqOptions, NotificationPipelineMetrics metrics)
         {
+            _metrics = metrics;
             _rabbitMqOptions = rabbitMqOptions.Value;
         }
 
         private async Task InitializeAsync()
         {
-            // Fast path to skip lock acquisition when connection is already ready.
+            // Skip initialization if connection and channel are already created
             if (_initialized) return;
 
+            // Ensure only one thread performs RabbitMQ initialization
             await _initLock.WaitAsync();
 
             try
             {
-                // Double-check initialization state after entering the lock.
+                // Double-check initialization state after acquiring the lock
                 if (_initialized) return;
 
-                // Create connection factory for local RabbitMQ broker.
+                // Configure connection factory using application RabbitMQ settings
                 var factory = new ConnectionFactory
                 {
                     HostName = _rabbitMqOptions.HostName,
                 };
 
-                // Open a single shared connection and channel for publishing.
+                // Establish shared connection and channel used for publishing events
                 _connection = await factory.CreateConnectionAsync();
                 _channel = await _connection.CreateChannelAsync();
 
-                // Ensure the fanout exchange exists before any publish attempt.
+                // Ensure the configured exchange exists before publishing messages
                 await _channel.ExchangeDeclareAsync(
                     exchange: _rabbitMqOptions.ExchangeName,
-                    type: ExchangeType.Fanout);
+                    type: ExchangeType.Fanout,
+                    durable: true);
 
                 _initialized = true;
             }
@@ -53,29 +59,49 @@ namespace OrderNotificationsService.Infrastructure.Messaging
             }
         }
 
-        public async Task PublishAsync<T>(T message)
+        public async Task PublishAsync(OrderStatusChangedEnvelope message, CancellationToken cancellationToken)
         {
-            // Lazily initialize RabbitMQ objects on first publish call.
+            // Lazily initialize RabbitMQ infrastructure on first publish
             await InitializeAsync();
 
-            // Serialize the event payload to UTF-8 JSON bytes.
+            // Serialize event envelope into UTF-8 JSON payload
             var json = JsonSerializer.Serialize(message);
             var body = Encoding.UTF8.GetBytes(json);
 
-            // Mark message as durable JSON so consumers can parse reliably.
+            // Configure message metadata for durability and traceability
             var props = new BasicProperties
             {
                 ContentType = "application/json",
-                DeliveryMode = DeliveryModes.Persistent
+                DeliveryMode = DeliveryModes.Persistent,
+                CorrelationId = message.CorrelationId,
+                MessageId = message.OutboxEventId.ToString()
             };
 
-            // Publish to fanout exchange so all bound queues receive the event.
-            await _channel!.BasicPublishAsync(
-                exchange: _rabbitMqOptions.ExchangeName,
-                routingKey: "",
-                mandatory: false,
-                basicProperties: props,
-                body: body);
+            // Attach distributed tracing information to message headers
+            props.Headers = new Dictionary<string, object?>
+            {
+                ["trace_id"] = message.TraceId
+            };
+
+            try
+            {
+                // Publish event to fanout exchange so all bound queues receive it
+                await _channel!.BasicPublishAsync(
+                    exchange: _rabbitMqOptions.ExchangeName,
+                    routingKey: string.Empty,
+                    mandatory: false,
+                    basicProperties: props,
+                    body: body,
+                    cancellationToken: cancellationToken);
+
+                _metrics.IncrementPublishSuccess();
+            }
+            catch
+            {
+                // Record failure metrics and rethrow publishing error
+                _metrics.IncrementPublishFailure();
+                throw;
+            }
         }
     }
 }

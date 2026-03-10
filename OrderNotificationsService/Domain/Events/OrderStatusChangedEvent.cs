@@ -13,5 +13,9 @@ namespace OrderNotificationsService.Domain.Events
         public OrderStatus NewStatus { get; set; }
 
         public DateTime OccurredAt { get; set; }
+
+        public string CorrelationId { get; set; } = string.Empty;
+
+        public string TraceId { get; set; } = string.Empty;
     }
 }

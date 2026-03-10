@@ -31,8 +31,21 @@ namespace OrderNotificationsService.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<DateTime?>("DeliveredAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("DeliveryAttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<int>("DeliveryStatus")
+                        .HasColumnType("int");
+
                     b.Property<bool>("IsRead")
                         .HasColumnType("bit");
+
+                    b.Property<string>("LastDeliveryError")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
 
                     b.Property<string>("Message")
                         .IsRequired()
@@ -40,6 +53,9 @@ namespace OrderNotificationsService.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(500)");
 
                     b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("SourceEventId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<int>("Type")
@@ -51,6 +67,9 @@ namespace OrderNotificationsService.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("UserId");
+
+                    b.HasIndex("SourceEventId", "Type")
+                        .IsUnique();
 
                     b.ToTable("Notifications", (string)null);
                 });
@@ -89,10 +108,20 @@ namespace OrderNotificationsService.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<DateTime?>("DeadLetteredAt")
+                        .HasColumnType("datetime2");
+
                     b.Property<string>("EventType")
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<DateTime?>("NextRetryAt")
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("Payload")
                         .IsRequired()
@@ -101,9 +130,16 @@ namespace OrderNotificationsService.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("ProcessedAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("int");
+
                     b.HasKey("Id");
 
+                    b.HasIndex("DeadLetteredAt");
+
                     b.HasIndex("ProcessedAt");
+
+                    b.HasIndex("ProcessedAt", "DeadLetteredAt", "NextRetryAt");
 
                     b.ToTable("OutboxEvents", (string)null);
                 });

@@ -1,7 +1,9 @@
 ﻿using OrderNotificationsService.Domain.Entities;
 using OrderNotificationsService.Domain.Events;
 using OrderNotificationsService.Features.Common;
+using OrderNotificationsService.Infrastructure.Correlation;
 using OrderNotificationsService.Infrastructure.Persistence;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace OrderNotificationsService.Features.Orders.UpdateOrderStatus
@@ -9,42 +11,46 @@ namespace OrderNotificationsService.Features.Orders.UpdateOrderStatus
     public class UpdateOrderStatusHandler
     {
         private readonly AppDbContext _dbContext;
+        private readonly ICorrelationContextAccessor _correlationContextAccessor;
 
-        public UpdateOrderStatusHandler(AppDbContext dbContext)
+        public UpdateOrderStatusHandler(AppDbContext dbContext, ICorrelationContextAccessor correlationContextAccessor)
         {
             _dbContext = dbContext;
+            _correlationContextAccessor = correlationContextAccessor;
         }
 
         public async Task<HandlerResult> Handle(UpdateOrderStatusCommand command)
         {
-            // Retrieve the order being updated.
+            // Load the target order from persistence
             var order = await _dbContext.Orders.FindAsync(command.OrderId);
 
-            // Return a failure result if the order does not exist.
+            // Fail fast if the order does not exist
             if (order == null)
                 return HandlerResult.Failure(HandlerErrorCode.NotFound);
 
             var oldStatus = order.Status;
 
-            // Avoid unnecessary updates if the status is already the requested value.
+            // Skip processing if the requested status is already applied
             if (oldStatus == command.NewStatus)
                 return HandlerResult.Success();
 
-            // Update the order state and record the modification timestamp.
+            // Apply the status transition and update modification metadata
             order.Status = command.NewStatus;
             order.UpdatedAt = DateTime.UtcNow;
 
-            // Create a domain event describing the state transition.
+            // Create domain event describing the status change
             var domainEvent = new OrderStatusChangedEvent
             {
                 OrderId = order.Id,
                 UserId = order.UserId,
                 OldStatus = oldStatus,
                 NewStatus = command.NewStatus,
-                OccurredAt = DateTime.UtcNow
+                OccurredAt = DateTime.UtcNow,
+                CorrelationId = _correlationContextAccessor.CorrelationId,
+                TraceId = Activity.Current?.TraceId.ToString() ?? string.Empty
             };
 
-            // Persist the event in the Outbox table to ensure reliable asynchronous processing.
+            // Wrap domain event into an outbox record for reliable event publishing
             var outboxEvent = new OutboxEvent
             {
                 Id = Guid.NewGuid(),
@@ -53,10 +59,10 @@ namespace OrderNotificationsService.Features.Orders.UpdateOrderStatus
                 CreatedAt = DateTime.UtcNow
             };
 
-            // Add the outbox event to the current transaction.
+            // Queue the event for asynchronous processing
             _dbContext.OutboxEvents.Add(outboxEvent);
 
-            // Save both the order update and outbox event atomically.
+            // Persist order update and outbox event in a single transaction
             await _dbContext.SaveChangesAsync();
 
             return HandlerResult.Success();

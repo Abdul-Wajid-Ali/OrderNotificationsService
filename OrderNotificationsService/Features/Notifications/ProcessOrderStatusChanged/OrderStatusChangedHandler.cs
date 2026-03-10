@@ -20,14 +20,15 @@ namespace OrderNotificationsService.Features.Notifications.ProcessOrderStatusCha
 
         public async Task Handle(OrderStatusChangedEvent evt, Guid sourceEventId, CancellationToken cancellationToken)
         {
+            // Build user-facing notification message from the event data
             var message = $"Your order {evt.OrderId} changed from {evt.OldStatus} to {evt.NewStatus}.";
 
-            // Load any existing notifications created from this event to ensure idempotency.
+            // Load previously created notifications for this event to guarantee idempotent processing
             var existingNotifications = await _dbContext.Notifications
                 .Where(x => x.SourceEventId == sourceEventId)
                 .ToListAsync(cancellationToken);
 
-            // Create an in-app notification if one does not already exist.
+            // Ensure an in-app notification exists for the user
             var inAppNotification = existingNotifications.FirstOrDefault(x => x.Type == NotificationType.InApp);
             if (inAppNotification == null)
             {
@@ -49,7 +50,7 @@ namespace OrderNotificationsService.Features.Notifications.ProcessOrderStatusCha
                 _dbContext.Notifications.Add(inAppNotification);
             }
 
-            // Create an email notification record if one does not already exist.
+            // Ensure an email notification record exists to track delivery attempts
             var emailNotification = existingNotifications.FirstOrDefault(x => x.Type == NotificationType.Email);
             if (emailNotification == null)
             {
@@ -61,34 +62,32 @@ namespace OrderNotificationsService.Features.Notifications.ProcessOrderStatusCha
                     OrderId = evt.OrderId,
                     Message = message,
                     Type = NotificationType.Email,
-                    DeliveryStatus = NotificationDeliveryStatus.Pending, 
+                    DeliveryStatus = NotificationDeliveryStatus.Pending,
                     DeliveryAttemptCount = 0,
-                    IsRead = true, 
+                    IsRead = true,
                     CreatedAt = DateTime.UtcNow
                 };
 
                 _dbContext.Notifications.Add(emailNotification);
             }
 
-            // If the email was already sent in a previous retry attempt, skip sending again.
+            // Skip delivery if the email notification was already successfully sent
             if (emailNotification.DeliveryStatus == NotificationDeliveryStatus.Sent)
             {
                 await _dbContext.SaveChangesAsync(cancellationToken);
                 return;
             }
 
-            // Increment attempt count before trying to deliver the email.
+            // Prepare notification for another delivery attempt
             emailNotification.DeliveryAttemptCount += 1;
-
-            // Clear any previous delivery error before retrying.
             emailNotification.LastDeliveryError = null;
 
             try
             {
-                // Attempt to send the email notification through the configured email service.
+                // Send email notification through the configured email delivery service
                 await _emailSender.SendOrderStatusChangeAsync(evt.UserId, evt.OrderId, message, cancellationToken);
 
-                // Mark the notification as successfully delivered.
+                // Mark email notification as successfully delivered
                 emailNotification.DeliveryStatus = NotificationDeliveryStatus.Sent;
                 emailNotification.DeliveredAt = DateTime.UtcNow;
 
@@ -96,13 +95,13 @@ namespace OrderNotificationsService.Features.Notifications.ProcessOrderStatusCha
             }
             catch (Exception ex)
             {
-                // Persist failure details so the retry mechanism can inspect and retry later.
+                // Record delivery failure so retry mechanisms can reattempt later
                 emailNotification.DeliveryStatus = NotificationDeliveryStatus.Failed;
                 emailNotification.LastDeliveryError = ex.Message;
 
                 await _dbContext.SaveChangesAsync(cancellationToken);
 
-                // Rethrow so the Outbox processor can trigger its retry policy.
+                // Propagate failure so the upstream outbox processor can trigger its retry policy
                 throw;
             }
         }
