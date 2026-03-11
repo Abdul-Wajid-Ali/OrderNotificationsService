@@ -70,53 +70,9 @@ namespace OrderNotificationsService.Infrastructure.Messaging
 
             // Create asynchronous consumer that reacts to incoming messages
             var consumer = new AsyncEventingBasicConsumer(channel);
-
-            consumer.ReceivedAsync += async (sender, ea) =>
-            {
-                // Decode and deserialize the incoming event envelope
-                var started = DateTime.UtcNow;
-                var body = ea.Body.ToArray();
-                var message = Encoding.UTF8.GetString(body);
-
-                var envelope = JsonSerializer.Deserialize<OrderStatusChangedEnvelope>(message);
-                if (envelope == null)
-                {
-                    _logger.LogWarning("Consumer received invalid payload: {Payload}", message);
-                    _metrics.IncrementConsumerFailure();
-                    return;
-                }
-
-                // Start tracing span for this message consumption
-                using var activity = ActivitySource.StartActivity("consume.order-status-changed", ActivityKind.Consumer);
-                activity?.SetTag("correlation.id", envelope.CorrelationId);
-                activity?.SetTag("outbox.event_id", envelope.OutboxEventId);
-                activity?.SetTag("trace.id.from_api", envelope.TraceId);
-
-                // Attach correlation metadata to logs for observability
-                using var logScope = _logger.BeginScope(new Dictionary<string, object>
-                {
-                    ["CorrelationId"] = envelope.CorrelationId,
-                    ["OutboxEventId"] = envelope.OutboxEventId
-                });
-
-                try
-                {
-                    // Resolve handler and process the domain event
-                    using var scope = _serviceProvider.CreateScope();
-                    var handler = scope.ServiceProvider.GetRequiredService<OrderStatusChangedHandler>();
-
-                    await handler.Handle(envelope.Event, envelope.OutboxEventId, stoppingToken);
-
-                    _metrics.IncrementConsumerSuccess();
-                    _metrics.RecordProcessingLatency(DateTime.UtcNow - started);
-                }
-                catch (Exception ex)
-                {
-                    // Record failure metrics and log processing error
-                    _logger.LogError(ex, "Failed consuming event {OutboxEventId}", envelope.OutboxEventId);
-                    _metrics.IncrementConsumerFailure();
-                }
-            };
+            
+            // Attach message processing handler
+            consumer.ReceivedAsync += HandleMessageAsync;
 
             // Begin consuming messages from the queue
             await channel.BasicConsumeAsync(
@@ -127,6 +83,66 @@ namespace OrderNotificationsService.Infrastructure.Messaging
 
             // Keep the background worker alive for the lifetime of the host
             await Task.Delay(Timeout.Infinite, stoppingToken);
+        }
+
+        private async Task HandleMessageAsync(object sender, BasicDeliverEventArgs ea)
+        {
+            // Capture start time to measure end-to-end processing latency
+            var started = DateTime.UtcNow;
+
+            // Decode message body from raw bytes to UTF8 string
+            var body = ea.Body.ToArray();
+            var message = Encoding.UTF8.GetString(body);
+
+            // Deserialize the envelope containing event payload and metadata
+            var envelope = JsonSerializer.Deserialize<OrderStatusChangedEnvelope>(message);
+
+            // Guard against malformed or incompatible payloads
+            if (envelope == null)
+            {
+                _logger.LogWarning("Consumer received invalid payload: {Payload}", message);
+                _metrics.IncrementConsumerFailure();
+                return;
+            }
+
+            // Start tracing span for observability of message processing
+            using var activity = ActivitySource.StartActivity(
+                "consume.order-status-changed",
+                ActivityKind.Consumer);
+
+            activity?.SetTag("correlation.id", envelope.CorrelationId);
+            activity?.SetTag("outbox.event_id", envelope.OutboxEventId);
+            activity?.SetTag("trace.id.from_api", envelope.TraceId);
+
+            // Attach correlation metadata to logs for easier debugging across services
+            using var logScope = _logger.BeginScope(new Dictionary<string, object>
+            {
+                ["CorrelationId"] = envelope.CorrelationId,
+                ["OutboxEventId"] = envelope.OutboxEventId
+            });
+
+            try
+            {
+                // Create scoped dependency container for this message
+                // ensuring handler dependencies have correct lifetime
+                using var scope = _serviceProvider.CreateScope();
+
+                // Resolve application handler responsible for processing the event
+                var handler = scope.ServiceProvider.GetRequiredService<OrderStatusChangedHandler>();
+
+                // Execute business logic for the order status change event
+                await handler.Handle(envelope.Event, envelope.OutboxEventId, CancellationToken.None);
+
+                // Record success metrics and processing latency
+                _metrics.IncrementConsumerSuccess();
+                _metrics.RecordProcessingLatency(DateTime.UtcNow - started);
+            }
+            catch (Exception ex)
+            {
+                // Log failure and update metrics for observability
+                _logger.LogError(ex, "Failed consuming event {OutboxEventId}", envelope.OutboxEventId);
+                _metrics.IncrementConsumerFailure();
+            }
         }
     }
 }

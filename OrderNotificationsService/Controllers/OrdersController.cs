@@ -5,11 +5,14 @@ using OrderNotificationsService.Features.Orders.UpdateOrderStatus;
 
 namespace OrderNotificationsService.Controllers
 {
-    [Route("api/[controller]")]
     [ApiController]
     public class OrdersController : ControllerBase
     {
+        //<summary>
+        // Endpoint to create a new order for a user. Accepts a CreateOrderRequest containing the UserId.
+        //</summary>
         [HttpPost]
+        [Route("api/create/order")]
         public async Task<IActionResult> CreateOrder(CreateOrderRequest request,
         [FromServices] CreateOrderHandler handler)
         {
@@ -23,7 +26,12 @@ namespace OrderNotificationsService.Controllers
             return Ok(new { OrderId = orderId });
         }
 
-        [HttpPut("{orderId}/status")]
+
+        //<summary>
+        // Endpoint to update the status of an existing order. Accepts the orderId as a route parameter and an UpdateOrderStatusRequest containing the new status.
+        //</summary>
+        [HttpPut]
+        [Route("api/update/{orderId}/status")]
         public async Task<IActionResult> UpdateOrderStatus(
             Guid orderId,
             UpdateOrderStatusRequest request,

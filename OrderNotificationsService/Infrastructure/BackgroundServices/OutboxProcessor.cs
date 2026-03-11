@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using OrderNotificationsService.Domain.Entities;
 using OrderNotificationsService.Domain.Events;
 using OrderNotificationsService.Infrastructure.Contracts;
 using OrderNotificationsService.Infrastructure.Messaging;
@@ -65,83 +66,7 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
             // Process events independently to isolate failures
             foreach (var evt in events)
             {
-                var started = DateTime.UtcNow;
-
-                try
-                {
-                    if (evt.EventType == nameof(OrderStatusChangedEvent))
-                    {
-                        // Rehydrate domain event from stored payload
-                        var domainEvent = JsonSerializer.Deserialize<OrderStatusChangedEvent>(evt.Payload);
-
-                        if (domainEvent == null)
-                        {
-                            _logger.LogWarning("Invalid event payload for outbox event {EventId}", evt.Id);
-                            evt.ProcessedAt = DateTime.UtcNow;
-                            continue;
-                        }
-
-                        // Wrap event with tracing metadata for downstream systems
-                        var envelope = new OrderStatusChangedEnvelope
-                        {
-                            OutboxEventId = evt.Id,
-                            CorrelationId = domainEvent.CorrelationId,
-                            TraceId = domainEvent.TraceId,
-                            Event = domainEvent
-                        };
-
-                        // Publish event to the message broker
-                        await publisher.PublishAsync(envelope, token);
-                    }
-                    else
-                    {
-                        _logger.LogWarning("No handler configured for event type {EventType}", evt.EventType);
-                    }
-
-                    // Mark event as successfully processed
-                    evt.ProcessedAt = DateTime.UtcNow;
-                    evt.LastError = null;
-                    evt.NextRetryAt = null;
-
-                    Interlocked.Increment(ref _processedCount);
-                    _metrics.RecordProcessingLatency(DateTime.UtcNow - started);
-                }
-                catch (Exception ex)
-                {
-                    // Record failure and increment retry counter
-                    evt.RetryCount += 1;
-                    evt.LastError = ex.Message;
-
-                    Interlocked.Increment(ref _failedCount);
-
-                    if (evt.RetryCount >= MaxRetries)
-                    {
-                        // Move permanently failing events to dead-letter state
-                        evt.DeadLetteredAt = DateTime.UtcNow;
-                        evt.NextRetryAt = null;
-
-                        _logger.LogError(
-                            ex,
-                            "Outbox event {EventId} moved to dead letter after {RetryCount} attempts",
-                            evt.Id,
-                            evt.RetryCount);
-                    }
-                    else
-                    {
-                        // Schedule retry using exponential backoff
-                        var retryDelaySeconds = BaseRetryDelay.TotalSeconds * Math.Pow(2, evt.RetryCount - 1);
-
-                        evt.NextRetryAt = DateTime.UtcNow.AddSeconds(Math.Min(retryDelaySeconds, 300));
-
-                        _logger.LogError(
-                            ex,
-                            "Failed processing event {EventId}. Retrying at {NextRetryAt} (attempt {RetryCount}/{MaxRetries})",
-                            evt.Id,
-                            evt.NextRetryAt,
-                            evt.RetryCount,
-                            MaxRetries);
-                    }
-                }
+                await ProcessSingleOutboxEvent(evt, db, publisher, token);
             }
 
             // Persist processing results for the batch
@@ -158,6 +83,7 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
             var pending = db.OutboxEvents
                 .Where(x => x.ProcessedAt == null && x.DeadLetteredAt == null);
 
+            // Calculate pending outbox count and age of the oldest event to measure queue lag
             var count = await pending.LongCountAsync(token);
             var oldest = await pending.MinAsync(x => (DateTime?)x.CreatedAt, token);
             var oldestAgeSeconds = oldest.HasValue ? (DateTime.UtcNow - oldest.Value).TotalSeconds : 0;
@@ -189,6 +115,8 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
 
             var failureRate = total == 0 ? 0 : (failed / (double)total) * 100;
 
+            Console.WriteLine("wajid ali here :: ", failureRate);
+
             // Emit alert if failure rate crosses monitoring threshold
             if (failureRate >= _monitoringOptions.FailureRateAlertThresholdPercent)
             {
@@ -198,6 +126,97 @@ namespace OrderNotificationsService.Infrastructure.BackgroundServices
                     _monitoringOptions.FailureRateAlertThresholdPercent,
                     failed,
                     total);
+            }
+        }
+
+        /// Processes a single outbox event and handles success, retry, or dead-letter outcomes.
+        private async Task ProcessSingleOutboxEvent(
+            OutboxEvent evt,
+            AppDbContext db,
+            RabbitMqPublisher publisher,
+            CancellationToken token)
+        {
+            var started = DateTime.UtcNow;
+
+            try
+            {
+                // Determine which domain event type is stored in the outbox
+                if (evt.EventType == nameof(OrderStatusChangedEvent))
+                {
+                    // Rehydrate domain event from the stored JSON payload
+                    var domainEvent = JsonSerializer.Deserialize<OrderStatusChangedEvent>(evt.Payload);
+
+                    // Guard against corrupted or incompatible payloads
+                    if (domainEvent == null)
+                    {
+                        _logger.LogWarning("Invalid event payload for outbox event {EventId}", evt.Id);
+                        evt.ProcessedAt = DateTime.UtcNow;
+                        return;
+                    }
+
+                    // Wrap the domain event in an envelope that carries
+                    // correlation and tracing metadata for downstream consumers
+                    var envelope = new OrderStatusChangedEnvelope
+                    {
+                        OutboxEventId = evt.Id,
+                        CorrelationId = domainEvent.CorrelationId,
+                        TraceId = domainEvent.TraceId,
+                        Event = domainEvent
+                    };
+
+                    // Publish the event to the message broker (RabbitMQ)
+                    await publisher.PublishAsync(envelope, token);
+                }
+                else
+                {
+                    // Defensive logging in case an unknown event type appears in the outbox
+                    _logger.LogWarning("No handler configured for event type {EventType}", evt.EventType);
+                }
+
+                // Mark the event as successfully processed
+                evt.ProcessedAt = DateTime.UtcNow;
+                evt.LastError = null;
+                evt.NextRetryAt = null;
+
+                // Update success metrics and processing latency
+                Interlocked.Increment(ref _processedCount);
+                _metrics.RecordProcessingLatency(DateTime.UtcNow - started);
+            }
+            catch (Exception ex)
+            {
+                // Record failure and increment retry attempt counter
+                evt.RetryCount += 1;
+                evt.LastError = ex.Message;
+
+                Interlocked.Increment(ref _failedCount);
+
+                if (evt.RetryCount >= MaxRetries)
+                {
+                    // Permanently failing events are moved to a dead-letter state
+                    evt.DeadLetteredAt = DateTime.UtcNow;
+                    evt.NextRetryAt = null;
+
+                    _logger.LogError(
+                        ex,
+                        "Outbox event {EventId} moved to dead letter after {RetryCount} attempts",
+                        evt.Id,
+                        evt.RetryCount);
+                }
+                else
+                {
+                    // Schedule the next retry using exponential backoff
+                    var retryDelaySeconds = BaseRetryDelay.TotalSeconds * Math.Pow(2, evt.RetryCount - 1);
+
+                    evt.NextRetryAt = DateTime.UtcNow.AddSeconds(Math.Min(retryDelaySeconds, 300));
+
+                    _logger.LogError(
+                        ex,
+                        "Failed processing event {EventId}. Retrying at {NextRetryAt} (attempt {RetryCount}/{MaxRetries})",
+                        evt.Id,
+                        evt.NextRetryAt,
+                        evt.RetryCount,
+                        MaxRetries);
+                }
             }
         }
     }

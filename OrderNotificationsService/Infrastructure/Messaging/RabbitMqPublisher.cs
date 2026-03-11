@@ -61,6 +61,10 @@ namespace OrderNotificationsService.Infrastructure.Messaging
 
         public async Task PublishAsync(OrderStatusChangedEnvelope message, CancellationToken cancellationToken)
         {
+            // Simulate transient failure for testing retryn and error handling logic in the notification pipeline
+            //throw new Exception("Simulated failure for retry testing");
+            //throw new Exception("Simulated publishing failure");
+
             // Lazily initialize RabbitMQ infrastructure on first publish
             await InitializeAsync();
 

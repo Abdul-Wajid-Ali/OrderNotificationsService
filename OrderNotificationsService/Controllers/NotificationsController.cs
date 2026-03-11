@@ -1,13 +1,15 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using OrderNotificationsService.Features.Notifications;
 using OrderNotificationsService.Features.Notifications.GetUserNotifications;
 
 namespace OrderNotificationsService.Controllers
 {
-    [Route("api/[controller]")]
     [ApiController]
+    [Route("api/user/notifications")]
     public class NotificationsController : ControllerBase
     {
+        //<summary>
+        /// Retrieves a paginated list of notifications for a specific user.
+        //</summary>
         [HttpGet("{userId:guid}")]
         public async Task<IActionResult> GetUserNotifications(
                     Guid userId,
